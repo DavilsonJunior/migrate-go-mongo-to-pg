@@ -8,73 +8,66 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
+	"migration-go/internal/config"
+	"migration-go/internal/database"
+	"migration-go/internal/models"
+
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
-
-// Constantes e Struct são as mesmas
-const (
-	postgresConnStr = "postgres://user:password@localhost:5440/sourcedb?sslmode=disable"
-	mongoConnStr    = "mongodb://root:password@localhost:27017"
-	mongoDatabase   = "destdb"
-	mongoCollection = "products"
-	numWorkers      = 10
-)
-
-type Product struct {
-	ID          int       `bson:"product_id"`
-	Name        string    `bson:"name"`
-	Description string    `bson:"description"`
-	Price       float64   `bson:"price"`
-	CreatedAt   time.Time `bson:"created_at"`
-}
 
 func main() {
 	ctx := context.Background()
 
-	// ---- 1. CONEXÕES ----
-	pgDB, err := sql.Open("postgres", postgresConnStr)
+	// ---- 1. CARREGAR CONFIGURAÇÃO ----
+	cfg, err := config.LoadConfig()
 	if err != nil {
+		log.Fatalf("Erro ao carregar configuração: %v", err)
+	}
+
+	// ---- 2. CONEXÕES ----
+	// PostgreSQL
+	pgManager := database.NewPostgresManager(&cfg.Postgres)
+	if err := pgManager.Connect(); err != nil {
 		log.Fatalf("Erro ao conectar ao PostgreSQL: %v", err)
 	}
-	defer pgDB.Close()
+	defer pgManager.Close()
 	fmt.Println("Conectado ao PostgreSQL!")
 
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoConnStr))
-	if err != nil {
+	// MongoDB
+	mongoManager := database.NewMongoManager(&cfg.MongoDB)
+	if err := mongoManager.Connect(ctx); err != nil {
 		log.Fatalf("Erro ao conectar ao MongoDB: %v", err)
 	}
-	defer mongoClient.Disconnect(ctx)
+	defer mongoManager.Disconnect(ctx)
 	fmt.Println("Conectado ao MongoDB!")
 
-	// ---- 2. PREPARAÇÃO DO DESTINO ----
-	setupPostgresTarget(pgDB) // Limpa a tabela de destino
+	// ---- 3. PREPARAÇÃO DO DESTINO ----
+	setupPostgresTarget(pgManager.GetDB()) // Limpa a tabela de destino
 
 	fmt.Println("Iniciando a migração (Apenas Goroutines, sem Stream)...")
 	startTime := time.Now()
-	collection := mongoClient.Database(mongoDatabase).Collection(mongoCollection)
+	collection := mongoManager.GetCollection()
 
-	// ---- 3. LEITURA (Tudo para a Memória - SEM STREAM) ----
+	// ---- 4. LEITURA (Tudo para a Memória - SEM STREAM) ----
 	fmt.Println("Lendo TODOS os documentos do MongoDB para a memória...")
 	cursor, err := collection.Find(ctx, bson.M{})
 	if err != nil {
 		log.Fatalf("Erro ao buscar documentos no MongoDB: %v", err)
 	}
 
-	var productsInMemory []Product
-	if err = cursor.All(ctx, &productsInMemory); err != nil {
+	var productsInMemory []models.Product
+	if err = cursor.All(ctx, &productsInMemory); err != nil { // todos documentos cursor
 		log.Fatalf("Erro ao decodificar todos os documentos: %v", err)
 	}
 	fmt.Printf("%d documentos carregados na memória.\n", len(productsInMemory))
 
-	// ---- 4. ESCRITA (Concorrente com Goroutines) ----
-	productChan := make(chan Product, 100)
+	// ---- 5. ESCRITA (Concorrente com Goroutines) ----
+	productChan := make(chan models.Product, 100) // Pra que serve o canal?
 	var wg sync.WaitGroup
+	pgDB := pgManager.GetDB()
 
 	// Inicia os workers que irão inserir no PG
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < cfg.App.NumWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -97,6 +90,7 @@ func main() {
 	close(productChan)
 
 	// Aguarda todos os workers terminarem
+	fmt.Printf("work teste")
 	wg.Wait()
 
 	duration := time.Since(startTime)

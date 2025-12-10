@@ -5,17 +5,9 @@ import (
 	"log"
 	"runtime"
 	"time"
-)
 
-// A struct continua a mesma
-type LargeProduct struct {
-	ID          int
-	Name        string
-	Description string
-	Price       float64
-	CreatedAt   time.Time
-	SomeData    [128]byte
-}
+	"migration-go/internal/models"
+)
 
 // Aumentamos o número para garantir o estouro em 32GB de RAM
 const recordsToCreate = 130_000_000 // 130 milhões de registros
@@ -25,7 +17,7 @@ func main() {
 	log.Println("Abra o Monitor de Atividade (macOS), Gerenciador de Tarefas (Windows) ou htop (Linux) para observar o consumo de RAM.")
 
 	// Slice que vai crescer até quebrar a memória
-	var memoryHog []LargeProduct
+	var memoryHog []models.LargeProduct
 
 	// Goroutine para imprimir estatísticas de memória
 	go func() {
@@ -41,7 +33,7 @@ func main() {
 
 	// Loop para encher a memória
 	for i := 0; i < recordsToCreate; i++ {
-		product := LargeProduct{
+		product := models.LargeProduct{
 			ID:          i + 1,
 			Name:        fmt.Sprintf("Produto Super Pesado %d", i+1),
 			Description: "Esta é uma descrição longa para garantir que a string ocupe um espaço considerável na memória RAM do sistema.",
